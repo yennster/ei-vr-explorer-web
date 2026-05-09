@@ -120,7 +120,7 @@ export class EdgeImpulseClient {
   }
 
   // POST /api/{projectId}/deploy  body: { deployType }
-  startDeploy(deployType: 'tflite' | 'zip' | 'arduino' | 'onnx' = 'tflite') {
+  startDeploy(deployType: 'tflite' | 'zip' | 'arduino' | 'onnx' = 'onnx') {
     return this.request<{ success: true }>('POST', `/api/${this.projectId}/deploy`, {
       body: { deployType },
     });

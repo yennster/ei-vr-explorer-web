@@ -4,9 +4,10 @@ import { EdgeImpulseClient } from '@/lib/edge-impulse';
 /**
  * GET /api/model-bundle/:projectId
  * Header: x-api-key
- * Triggers a TFLite build (POST /deploy), polls the build job, then returns
- * the artifact URL the headset should download. The Vercel function timeout
- * is 300s by default which is enough for a typical EI TFLite build.
+ * Triggers an ONNX build (POST /deploy with deployType=onnx), polls the
+ * build job, then returns the artifact URL the headset should download.
+ * Unity Sentis loads ONNX directly. Vercel function timeout is 300s, enough
+ * for a typical EI build.
  */
 export async function GET(
   request: NextRequest,
@@ -23,7 +24,7 @@ export async function GET(
   // Check if a deploy artifact already exists; otherwise trigger one.
   const existing = await ei.getDeployArtifact().catch(() => null);
   if (!existing?.hasDeployment) {
-    await ei.startDeploy('tflite');
+    await ei.startDeploy('onnx');
     // After triggering deploy, the EI server starts a build job. There isn't a
     // "deploy job id" returned directly — instead poll getDeployArtifact()
     // until hasDeployment is true.
