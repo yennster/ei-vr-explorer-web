@@ -13,8 +13,9 @@ type PairResponse = {
 type DeployStatus =
   | { kind: 'idle' }
   | { kind: 'checking' }
-  | { kind: 'missing' }
-  | { kind: 'ready'; version?: number }
+  | { kind: 'missing'; type: string; engine: string }
+  | { kind: 'no-target'; availableFormats: string[] }
+  | { kind: 'ready'; version?: number; type: string; engine: string }
   | { kind: 'building' }
   | { kind: 'error'; message: string };
 
@@ -105,19 +106,34 @@ export default function Home() {
         const res = await fetch(`/api/build-deployment/${pair.projectId}`, {
           headers: { 'x-api-key': apiKey },
         });
-        const data = (await res.json()) as
-          | { hasDeployment: boolean; version?: number }
-          | { error: string };
+        type CheckOk = {
+          hasDeployment: boolean;
+          targetFound: boolean;
+          version?: number;
+          type?: string;
+          engine?: string;
+          availableFormats?: string[];
+        };
+        const data = (await res.json()) as CheckOk | { error: string };
         if (cancelled) return;
         if (!res.ok || 'error' in data) {
           setDeploy({ kind: 'error', message: 'error' in data ? data.error : `HTTP ${res.status}` });
           return;
         }
-        setDeploy(
-          data.hasDeployment
-            ? { kind: 'ready', version: data.version }
-            : { kind: 'missing' },
-        );
+        if (!data.targetFound) {
+          setDeploy({ kind: 'no-target', availableFormats: data.availableFormats ?? [] });
+          return;
+        }
+        if (data.hasDeployment) {
+          setDeploy({
+            kind: 'ready',
+            version: data.version,
+            type: data.type ?? '',
+            engine: data.engine ?? '',
+          });
+        } else {
+          setDeploy({ kind: 'missing', type: data.type ?? '', engine: data.engine ?? '' });
+        }
       } catch (err) {
         if (cancelled) return;
         setDeploy({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
@@ -134,9 +150,15 @@ export default function Home() {
         method: 'POST',
         headers: { 'x-api-key': apiKey },
       });
-      const data = (await res.json()) as
-        | { built: true; alreadyExisted?: boolean; version?: number; durationMs?: number }
-        | { error: string; stdoutTail?: string };
+      type BuildOk = {
+        built: true;
+        alreadyExisted?: boolean;
+        version?: number;
+        durationMs?: number;
+        type?: string;
+        engine?: string;
+      };
+      const data = (await res.json()) as BuildOk | { error: string; stdoutTail?: string };
       if (!res.ok || 'error' in data) {
         const tail = 'stdoutTail' in data && data.stdoutTail ? `\n${data.stdoutTail}` : '';
         setDeploy({
@@ -145,7 +167,12 @@ export default function Home() {
         });
         return;
       }
-      setDeploy({ kind: 'ready', version: data.version });
+      setDeploy({
+        kind: 'ready',
+        version: data.version,
+        type: data.type ?? '',
+        engine: data.engine ?? '',
+      });
     } catch (err) {
       setDeploy({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
     }
@@ -255,22 +282,36 @@ export default function Home() {
 
             {deploy.kind === 'ready' && (
               <p className="text-sm" style={{ color: EI_PURPLE }}>
-                ✓ ONNX + EON Compiler build is ready
+                ✓ {deploy.type || 'ONNX'} + {deploy.engine || 'EON Compiler'} build is ready
                 {deploy.version !== undefined && ` (version ${deploy.version})`}.
                 The Quest will auto-pull it on next pair.
               </p>
             )}
 
             {deploy.kind === 'missing' && (
-              <button
-                onClick={buildDeployment}
-                style={{ backgroundColor: EI_PURPLE }}
-                onMouseOver={(e) => (e.currentTarget.style.backgroundColor = EI_PURPLE_HOVER)}
-                onMouseOut={(e) => (e.currentTarget.style.backgroundColor = EI_PURPLE)}
-                className="self-start rounded-md px-4 py-2 text-sm font-medium text-white transition-colors"
-              >
-                Build ONNX deployment with EON Compiler
-              </button>
+              <>
+                <p className="text-xs text-zinc-500">
+                  Will build target <code className="font-mono">{deploy.type}</code> with engine{' '}
+                  <code className="font-mono">{deploy.engine}</code>.
+                </p>
+                <button
+                  onClick={buildDeployment}
+                  style={{ backgroundColor: EI_PURPLE }}
+                  onMouseOver={(e) => (e.currentTarget.style.backgroundColor = EI_PURPLE_HOVER)}
+                  onMouseOut={(e) => (e.currentTarget.style.backgroundColor = EI_PURPLE)}
+                  className="self-start rounded-md px-4 py-2 text-sm font-medium text-white transition-colors"
+                >
+                  Build deployment with EON Compiler
+                </button>
+              </>
+            )}
+
+            {deploy.kind === 'no-target' && (
+              <pre className="whitespace-pre-wrap rounded bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                {`This project doesn't expose an ONNX deployment block.\n` +
+                  `Available formats: ${deploy.availableFormats.join(', ') || '(none)'}\n\n` +
+                  `In Edge Impulse Studio: Deployment → Search field → "ONNX model" or similar → enable. Then reload this page.`}
+              </pre>
             )}
 
             {deploy.kind === 'building' && (

@@ -129,9 +129,20 @@ export class EdgeImpulseClient {
     return this.request<DeployArtifactResponse>('GET', `/api/${this.projectId}/deploy`);
   }
 
+  // GET /api/{projectId}/deployment/targets
+  // Lists deployment formats available for this project. Each target has a
+  // `format` string — that's what the `type=` query expects elsewhere.
+  listDeploymentTargets() {
+    return this.request<DeploymentTargetsResponse>(
+      'GET',
+      `/api/${this.projectId}/deployment/targets`,
+    );
+  }
+
   // GET /api/{projectId}/deployment?type=&engine=
   // Returns whether a build artifact already exists for the given combo.
-  getDeployment(type: DeployType, engine: ModelEngine) {
+  // `type` is the format string from listDeploymentTargets().
+  getDeployment(type: string, engine: ModelEngine) {
     return this.request<GetDeploymentResponse>('GET', `/api/${this.projectId}/deployment`, {
       query: { type, engine },
     });
@@ -139,7 +150,7 @@ export class EdgeImpulseClient {
 
   // POST /api/{projectId}/jobs/build-ondevice-model?type=
   // body: { engine, modelType? } — kicks off a build and returns a jobId.
-  buildOnDeviceModel(type: DeployType, engine: ModelEngine, modelType: 'float32' | 'int8' = 'float32') {
+  buildOnDeviceModel(type: string, engine: ModelEngine, modelType: 'float32' | 'int8' = 'float32') {
     return this.request<JobStartResponse>(
       'POST',
       `/api/${this.projectId}/jobs/build-ondevice-model`,
@@ -179,6 +190,23 @@ export type GetDeploymentResponse = {
   success: true;
   hasDeployment: boolean;
   version?: number;
+};
+
+export type DeploymentTarget = {
+  name: string;
+  description: string;
+  format: string; // <-- the `type` value to pass to /deployment and /jobs/build-ondevice-model
+  supportedEngines: ModelEngine[];
+  hasEonCompiler: boolean;
+  recommendedForProject?: boolean;
+  disabledForProject?: boolean;
+  reasonTargetDisabled?: string;
+  uiSection?: string;
+};
+
+export type DeploymentTargetsResponse = {
+  success: true;
+  targets: DeploymentTarget[];
 };
 
 export type ProjectInfoResponse = {

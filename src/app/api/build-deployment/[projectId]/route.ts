@@ -1,22 +1,41 @@
 import { type NextRequest } from 'next/server';
-import { EdgeImpulseClient, type DeployType, type ModelEngine } from '@/lib/edge-impulse';
+import { EdgeImpulseClient, type ModelEngine, type DeploymentTarget } from '@/lib/edge-impulse';
 
-const TARGET_TYPE: DeployType = 'onnx';
-const TARGET_ENGINE: ModelEngine = 'tflite-eon';
+const PREFERRED_ENGINE: ModelEngine = 'tflite-eon';
+
+/**
+ * The exact `type` string EI expects depends on the project — different
+ * projects expose different deploy blocks. We probe the project's available
+ * targets and pick the best ONNX-flavored one. We rank candidates by:
+ *   1. Format string match against ONNX hints
+ *   2. Not disabled for this project
+ *   3. Has EON Compiler support (so the DSP step bakes into the model)
+ */
+function pickOnnxTarget(targets: DeploymentTarget[]): DeploymentTarget | null {
+  const onnxHints = ['onnx-model', 'onnx', 'tensorrt-onnx', 'open-neural-network'];
+  const candidates = targets
+    .filter((t) => !t.disabledForProject)
+    .filter((t) => {
+      const f = (t.format || '').toLowerCase();
+      const n = (t.name || '').toLowerCase();
+      return onnxHints.some((h) => f.includes(h) || n.includes('onnx'));
+    });
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => {
+    const score = (t: DeploymentTarget) =>
+      (t.hasEonCompiler ? 2 : 0) + (t.recommendedForProject ? 1 : 0);
+    return score(b) - score(a);
+  });
+  return candidates[0];
+}
 
 /**
  * POST /api/build-deployment/:projectId
  * Header: x-api-key
  *
- * Ensures the project has an ONNX deployment built with EON Compiler enabled
- * (the format Unity Sentis expects, with DSP baked into the ONNX so we feed
- * raw IMU/audio samples directly).
- *
- * Flow:
- *   1. Check getDeployment(onnx, tflite-eon) — if hasDeployment, done.
- *   2. Otherwise POST jobs/build-ondevice-model → jobId.
- *   3. Long-poll job status until finished. Vercel function timeout is 300s.
- *   4. Return { built: true|false, alreadyExisted, jobId, durationMs }.
+ * Discovers the project's ONNX-compatible deployment target, then ensures a
+ * build exists with EON Compiler enabled (the format Unity Sentis expects,
+ * with DSP baked in).
  */
 export async function POST(
   request: NextRequest,
@@ -30,10 +49,37 @@ export async function POST(
 
   const ei = new EdgeImpulseClient(apiKey, id);
 
+  // Discover the right deployment type for THIS project.
+  let targets;
+  try {
+    targets = (await ei.listDeploymentTargets()).targets;
+  } catch (err) {
+    return Response.json(
+      { error: `Failed to list deployment targets: ${err instanceof Error ? err.message : err}` },
+      { status: 502 },
+    );
+  }
+  const target = pickOnnxTarget(targets);
+  if (!target) {
+    const formats = targets.map((t) => t.format).filter(Boolean);
+    return Response.json(
+      {
+        error:
+          'No ONNX-compatible deployment target found for this project. ' +
+          `Available formats: ${formats.join(', ') || '(none)'}. ` +
+          'You may need to enable "ONNX model" in the project Deployment page.',
+      },
+      { status: 422 },
+    );
+  }
+  const engine: ModelEngine = target.supportedEngines.includes(PREFERRED_ENGINE)
+    ? PREFERRED_ENGINE
+    : (target.supportedEngines[0] ?? 'tflite');
+
   // 1. Already built?
   let existing;
   try {
-    existing = await ei.getDeployment(TARGET_TYPE, TARGET_ENGINE);
+    existing = await ei.getDeployment(target.format, engine);
   } catch (err) {
     return Response.json(
       { error: `Failed to check deployment status: ${err instanceof Error ? err.message : err}` },
@@ -45,8 +91,8 @@ export async function POST(
       built: true,
       alreadyExisted: true,
       version: existing.version,
-      type: TARGET_TYPE,
-      engine: TARGET_ENGINE,
+      type: target.format,
+      engine,
     });
   }
 
@@ -54,7 +100,7 @@ export async function POST(
   const startedAt = Date.now();
   let jobId: number;
   try {
-    const start = await ei.buildOnDeviceModel(TARGET_TYPE, TARGET_ENGINE);
+    const start = await ei.buildOnDeviceModel(target.format, engine);
     jobId = start.id;
   } catch (err) {
     return Response.json(
@@ -63,8 +109,7 @@ export async function POST(
     );
   }
 
-  // 3. Poll until done. Cap at 4.5 minutes to leave headroom under the 300s
-  //    Vercel function timeout.
+  // 3. Poll until done. Cap at 4.5 minutes.
   const deadline = startedAt + 4.5 * 60 * 1000;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 4000));
@@ -72,7 +117,6 @@ export async function POST(
     try {
       status = await ei.getJobStatus(jobId);
     } catch {
-      // transient; keep polling
       continue;
     }
     if (!status.job.finished) continue;
@@ -92,8 +136,8 @@ export async function POST(
       alreadyExisted: false,
       jobId,
       durationMs: Date.now() - startedAt,
-      type: TARGET_TYPE,
-      engine: TARGET_ENGINE,
+      type: target.format,
+      engine,
     });
   }
 
@@ -106,8 +150,7 @@ export async function POST(
 /**
  * GET /api/build-deployment/:projectId
  * Header: x-api-key
- * Lightweight existence check — does NOT trigger a build. Useful to decide
- * whether to show the build button on the page.
+ * Existence check — does NOT trigger a build.
  */
 export async function GET(
   request: NextRequest,
@@ -120,12 +163,26 @@ export async function GET(
   if (!id) return Response.json({ error: 'invalid projectId' }, { status: 400 });
   const ei = new EdgeImpulseClient(apiKey, id);
   try {
-    const r = await ei.getDeployment(TARGET_TYPE, TARGET_ENGINE);
+    const targets = (await ei.listDeploymentTargets()).targets;
+    const target = pickOnnxTarget(targets);
+    if (!target) {
+      const formats = targets.map((t) => t.format).filter(Boolean);
+      return Response.json({
+        hasDeployment: false,
+        targetFound: false,
+        availableFormats: formats,
+      });
+    }
+    const engine: ModelEngine = target.supportedEngines.includes(PREFERRED_ENGINE)
+      ? PREFERRED_ENGINE
+      : (target.supportedEngines[0] ?? 'tflite');
+    const r = await ei.getDeployment(target.format, engine);
     return Response.json({
       hasDeployment: r.hasDeployment,
+      targetFound: true,
       version: r.version,
-      type: TARGET_TYPE,
-      engine: TARGET_ENGINE,
+      type: target.format,
+      engine,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
