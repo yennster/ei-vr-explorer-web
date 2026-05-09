@@ -1,17 +1,33 @@
 import JSZip from 'jszip';
 
 /**
- * Edge Impulse's `arduino` deploy target packages the trained TFLite model as
- * a C byte array inside a header/cpp file (path varies across versions, but
- * always lives somewhere under `tflite-model/`). This module unzips the
- * deployment archive, finds that file, and parses the array back into raw
- * TFLite bytes — which can then be fed to tflite2onnx.
+ * Pulls the raw TFLite flatbuffer out of an Edge Impulse deployment zip.
+ *
+ * EI ships the trained model in different shapes depending on the deploy
+ * format we picked:
+ *   - `arduino` and `android-cpp` zips embed the model as a C byte array
+ *     in `tflite-model/tflite-trained.{h,cpp}`.
+ *   - `wasm` / `wasm-browser-simd` zips often include a raw `.tflite` file
+ *     alongside the WASM runtime.
+ *   - `zip` is a generic library zip; it can be either of the above.
+ *
+ * This helper tries the raw-file path first (fast) and falls back to
+ * parsing the C array (works everywhere the C++ SDK ships).
  */
-
-export async function extractTFLiteFromArduinoZip(zipBytes: ArrayBuffer): Promise<Uint8Array> {
+export async function extractTFLiteFromDeploymentZip(zipBytes: ArrayBuffer): Promise<Uint8Array> {
   const zip = await JSZip.loadAsync(zipBytes);
-  // Match common variants:
-  //   tflite-trained.h, tflite-trained.cpp, tflite_trained_model.h, etc.
+
+  // 1. Prefer a raw .tflite file if the zip happens to ship one.
+  const rawHit = Object.values(zip.files).find((f) => {
+    if (f.dir) return false;
+    return /\.tflite$/i.test(f.name);
+  });
+  if (rawHit) {
+    const buf = await rawHit.async('uint8array');
+    if (buf.length > 16) return buf;
+  }
+
+  // 2. Otherwise look for the standard EI tflite-model header/cpp file.
   const candidate = Object.values(zip.files).find((f) => {
     if (f.dir) return false;
     const lower = f.name.toLowerCase();
@@ -21,7 +37,7 @@ export async function extractTFLiteFromArduinoZip(zipBytes: ArrayBuffer): Promis
   if (!candidate) {
     const names = Object.keys(zip.files).filter((n) => /tflite/i.test(n)).slice(0, 20);
     throw new Error(
-      `No tflite-trained.{h,cpp} found in zip. ` +
+      `No raw .tflite or tflite-trained.{h,cpp} found in zip. ` +
       `tflite-related files: ${names.join(', ') || '(none)'}`,
     );
   }
@@ -29,11 +45,13 @@ export async function extractTFLiteFromArduinoZip(zipBytes: ArrayBuffer): Promis
   return parseCByteArray(text);
 }
 
+/** Back-compat alias for the earlier name; new code should use the generic name. */
+export const extractTFLiteFromArduinoZip = extractTFLiteFromDeploymentZip;
+
 /**
  * Parse a C byte array literal back into a Uint8Array.
  * Matches forms like:
  *   const unsigned char ei_tflite_trained_model[] = { 0x18, 0x00, ..., 0xff };
- * Tolerates whitespace, line continuations, and trailing length declarations.
  */
 export function parseCByteArray(source: string): Uint8Array {
   const arrayMatch = source.match(/=\s*\{([\s\S]*?)\}\s*;/);
@@ -51,14 +69,11 @@ export function parseCByteArray(source: string): Uint8Array {
     } else if (/^-?\d+$/.test(tok)) {
       n = parseInt(tok, 10);
     } else {
-      // Skip unknown tokens (some files have inline comments or stray macros).
       continue;
     }
     if (!Number.isFinite(n) || n < -128 || n > 255) continue;
     out[written++] = n & 0xff;
   }
-  if (written < 16) {
-    throw new Error(`Parsed only ${written} bytes — file format unexpected`);
-  }
+  if (written < 16) throw new Error(`Parsed only ${written} bytes — file format unexpected`);
   return out.subarray(0, written);
 }

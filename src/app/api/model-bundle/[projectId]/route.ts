@@ -4,7 +4,7 @@ import {
   type DeploymentTarget,
   type ModelEngine,
 } from '@/lib/edge-impulse';
-import { extractTFLiteFromArduinoZip } from '@/lib/tflite-extract';
+import { extractTFLiteFromDeploymentZip } from '@/lib/tflite-extract';
 
 const TARGET_PRIORITY = ['arduino', 'android-cpp', 'wasm-browser-simd', 'wasm', 'zip'];
 const ENGINE: ModelEngine = 'tflite';
@@ -111,7 +111,7 @@ export async function GET(
   // Extract the TFLite flatbuffer from inside the C-array header.
   let tfliteBytes: Uint8Array;
   try {
-    tfliteBytes = await extractTFLiteFromArduinoZip(zipBytes);
+    tfliteBytes = await extractTFLiteFromDeploymentZip(zipBytes);
   } catch (err) {
     return Response.json(
       { error: `TFLite extraction failed: ${err instanceof Error ? err.message : err}` },
