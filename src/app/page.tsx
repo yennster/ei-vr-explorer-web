@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 
 type PairResponse = {
@@ -19,13 +19,13 @@ export default function Home() {
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const autoSubmitted = useRef(false);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  const runPair = useCallback(async (keyToUse: string) => {
     setError(null);
     setBusy(true);
     try {
-      const trimmed = apiKey.trim();
+      const trimmed = keyToUse.trim();
       if (!trimmed) throw new Error('Paste an Edge Impulse API key');
 
       const res = await fetch('/api/pair', {
@@ -70,7 +70,21 @@ export default function Home() {
     } finally {
       setBusy(false);
     }
-  }
+  }, []);
+
+  // Auto-fill + auto-submit when ?apiKey=ei_... is in the URL.
+  // After read, strip the param from the URL so the key isn't left in history.
+  useEffect(() => {
+    if (autoSubmitted.current) return;
+    const url = new URL(window.location.href);
+    const fromUrl = url.searchParams.get('apiKey');
+    if (!fromUrl) return;
+    autoSubmitted.current = true;
+    setApiKey(fromUrl);
+    url.searchParams.delete('apiKey');
+    window.history.replaceState({}, '', url.toString());
+    void runPair(fromUrl);
+  }, [runPair]);
 
   return (
     <main className="mx-auto flex min-h-screen max-w-xl flex-col gap-8 p-8 font-sans">
@@ -85,7 +99,13 @@ export default function Home() {
       </header>
 
       {!pair && (
-        <form onSubmit={submit} className="flex flex-col gap-4">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void runPair(apiKey);
+          }}
+          className="flex flex-col gap-4"
+        >
           <label className="flex flex-col gap-1 text-sm">
             <span className="font-medium">API key</span>
             <input
@@ -99,6 +119,7 @@ export default function Home() {
             />
             <span className="text-xs text-zinc-500">
               Studio → project Dashboard → Keys. Project ID is detected from the key.
+              You can also pass <code className="font-mono">?apiKey=ei_...</code> in the URL to auto-pair.
             </span>
           </label>
           {error && <p className="text-sm text-red-600">{error}</p>}
