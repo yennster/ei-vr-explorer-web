@@ -25,23 +25,48 @@ export default function Home() {
     setError(null);
     setBusy(true);
     try {
+      const trimmed = apiKey.trim();
+      if (!trimmed) throw new Error('Paste an Edge Impulse API key');
+
       const res = await fetch('/api/pair', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiKey }),
+        body: JSON.stringify({ apiKey: trimmed }),
       });
-      const data = (await res.json()) as PairResponse | { error: string };
-      if (!res.ok || 'error' in data) {
-        throw new Error('error' in data ? data.error : 'Pairing failed');
+
+      let data: PairResponse | { error?: unknown } | null = null;
+      try {
+        data = (await res.json()) as PairResponse | { error?: unknown };
+      } catch {
+        throw new Error(`Pairing failed (HTTP ${res.status}) — server response was not JSON`);
       }
-      setPair(data);
-      const payload = JSON.stringify({
-        baseUrl: window.location.origin,
-        code: data.code,
-      });
+
+      if (!res.ok || (data && 'error' in data)) {
+        const raw = (data as { error?: unknown })?.error;
+        const msg =
+          typeof raw === 'string'
+            ? raw
+            : raw != null
+              ? JSON.stringify(raw)
+              : `Pairing failed (HTTP ${res.status})`;
+        throw new Error(msg);
+      }
+
+      const ok = data as PairResponse;
+      setPair(ok);
+      const payload = JSON.stringify({ baseUrl: window.location.origin, code: ok.code });
       setQrDataUrl(await QRCode.toDataURL(payload, { margin: 1, width: 280 }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      console.error('[pair] failed', err);
+      const msg =
+        err instanceof Error
+          ? err.message
+          : typeof err === 'string'
+            ? err
+            : err && typeof err === 'object'
+              ? JSON.stringify(err)
+              : 'Pairing failed';
+      setError(msg);
     } finally {
       setBusy(false);
     }

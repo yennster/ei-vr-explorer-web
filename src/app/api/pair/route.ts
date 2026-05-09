@@ -28,7 +28,11 @@ export async function POST(request: NextRequest) {
     projects = await listProjectsForKey(apiKey);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Invalid API key';
-    return Response.json({ error: `Edge Impulse rejected the key: ${message}` }, { status: 401 });
+    console.error('[pair] listProjectsForKey failed:', message);
+    return Response.json(
+      { error: `Edge Impulse rejected the key: ${message}` },
+      { status: 401 },
+    );
   }
   if (projects.length === 0) {
     return Response.json({ error: 'API key has no project access' }, { status: 401 });

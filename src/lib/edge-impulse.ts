@@ -9,20 +9,23 @@ export type EdgeImpulseError = {
  * GET /api/projects with an API key returns just the projects that key has
  * access to. For a project-scoped key (the common case), that's a single
  * project — which lets us derive the project ID without asking the user.
+ *
+ * Throws a real Error with a useful message so the calling route can surface
+ * EI's actual rejection reason to the user.
  */
 export async function listProjectsForKey(apiKey: string): Promise<Array<{ id: number; name: string }>> {
   const res = await fetch(`${STUDIO}/api/projects`, {
     headers: { 'x-api-key': apiKey, 'Accept': 'application/json' },
   });
   const text = await res.text();
-  let data: { success?: boolean; error?: string; projects?: Array<{ id: number; name: string }> };
+  let data: { success?: boolean; error?: string; projects?: Array<{ id: number; name: string }> } | null = null;
   try { data = JSON.parse(text); } catch {
-    throw <EdgeImpulseError>{ status: res.status, message: text || res.statusText };
+    throw new Error(`HTTP ${res.status}: ${text.slice(0, 200) || res.statusText}`);
   }
-  if (!res.ok || data.success === false) {
-    throw <EdgeImpulseError>{ status: res.status, message: data.error || res.statusText };
+  if (!res.ok || data?.success === false) {
+    throw new Error(data?.error || `HTTP ${res.status}: ${res.statusText}`);
   }
-  return data.projects ?? [];
+  return data?.projects ?? [];
 }
 
 export class EdgeImpulseClient {
