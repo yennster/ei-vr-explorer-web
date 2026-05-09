@@ -135,12 +135,15 @@ export default function Home() {
   }, []);
 
   // Auto-fill + auto-submit when ?apiKey=ei_... is in the URL.
+  // setState-in-effect is intentional here: one-shot initialization gated
+  // by autoSubmitted ref, can't cascade.
   useEffect(() => {
     if (autoSubmitted.current) return;
     const url = new URL(window.location.href);
     const fromUrl = url.searchParams.get('apiKey');
     if (!fromUrl) return;
     autoSubmitted.current = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setApiKey(fromUrl);
     url.searchParams.delete('apiKey');
     window.history.replaceState({}, '', url.toString());
@@ -148,9 +151,13 @@ export default function Home() {
   }, [runPair]);
 
   // After pairing, check whether the ONNX+EON deployment already exists.
+  // setState-in-effect is intentional here: 'checking' is a one-shot
+  // loading marker before the async fetch, plus the cancelled flag
+  // prevents stale completions.
   useEffect(() => {
     if (!pair || !apiKey) return;
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDeploy({ kind: 'checking' });
     (async () => {
       try {
@@ -243,7 +250,7 @@ export default function Home() {
           Edge Impulse VR Explorer
         </h1>
         <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-          Pair a Quest 2 with your Edge Impulse project. Paste your project's
+          Pair a Quest 2 with your Edge Impulse project. Paste your project&apos;s
           API key, then scan the QR code from inside the headset.
         </p>
       </header>
@@ -373,7 +380,7 @@ export default function Home() {
 
             {deploy.kind === 'building' && (
               <p className="text-sm text-zinc-500">
-                Building… this usually takes 1–3 minutes. Don't close this tab.
+                Building… this usually takes 1–3 minutes. Don&apos;t close this tab.
               </p>
             )}
 
