@@ -59,13 +59,11 @@ export class EdgeImpulseClient {
     try {
       data = JSON.parse(text);
     } catch {
-      throw <EdgeImpulseError>{ status: res.status, message: text || res.statusText };
+      throw new Error(`HTTP ${res.status}: ${text.slice(0, 200) || res.statusText}`);
     }
     if (!res.ok || (data as { success?: boolean }).success === false) {
-      throw <EdgeImpulseError>{
-        status: res.status,
-        message: (data as { error?: string }).error || res.statusText,
-      };
+      const eiError = (data as { error?: string }).error;
+      throw new Error(eiError || `HTTP ${res.status}: ${res.statusText}`);
     }
     return data as T;
   }

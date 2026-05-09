@@ -128,9 +128,8 @@ export async function GET(
       engine: TARGET_ENGINE,
     });
   } catch (err) {
-    return Response.json(
-      { error: err instanceof Error ? err.message : 'Status check failed' },
-      { status: 502 },
-    );
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[build-deployment] GET status check failed for project ${id}:`, message);
+    return Response.json({ error: message }, { status: 502 });
   }
 }
