@@ -28,10 +28,9 @@ Quest 2 app. Handles:
 ### TODO — replace history-scan workaround once EI exposes custom org blocks
 
 When a project has a custom org-level deployment block installed, EI's
-`/api/{projectId}/deployment/targets` endpoint **doesn't include it in the
-returned list** — even though the block clearly works (you can build with
-it from Studio, and the resulting build shows up in
-`/deployment/history` with `format: "org-XXXXX"`).
+`/api/{projectId}/deployment/targets` endpoint doesn't include it in the
+returned list and the resulting build shows up in `/deployment/history`
+with `format: "org-XXXXX"`).
 
 As a temporary workaround, [`src/lib/pick-target.ts`](src/lib/pick-target.ts)
 falls back to scanning `/deployment/history` for any recent `org-*`
