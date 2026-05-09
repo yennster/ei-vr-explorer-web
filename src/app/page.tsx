@@ -80,7 +80,22 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [deploy, setDeploy] = useState<DeployStatus>({ kind: 'idle' });
+  const [now, setNow] = useState<number>(() => Date.now());
   const autoSubmitted = useRef(false);
+
+  useEffect(() => {
+    if (!pair) return;
+    if (Date.now() >= pair.expiresAt) return;
+    const id = setInterval(() => {
+      const t = Date.now();
+      setNow(t);
+      if (t >= pair.expiresAt) clearInterval(id);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [pair]);
+
+  const secondsLeft = pair ? Math.max(0, Math.floor((pair.expiresAt - now) / 1000)) : 0;
+  const expired = pair !== null && secondsLeft === 0;
 
   const runPair = useCallback(async (keyToUse: string) => {
     setError(null);
@@ -310,25 +325,62 @@ export default function Home() {
               {pair.code}
             </p>
             {qrDataUrl && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={qrDataUrl}
-                alt="Pairing QR code"
-                className="rounded bg-white p-2"
-              />
+              <div className="relative">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={qrDataUrl}
+                  alt="Pairing QR code"
+                  className={`rounded bg-white p-2 transition-all ${
+                    expired ? 'opacity-30 blur-md' : ''
+                  }`}
+                />
+                {expired && (
+                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                    <span
+                      className="rounded-md px-4 py-1 text-sm font-bold tracking-widest text-white shadow-lg"
+                      style={{ backgroundColor: EI_PURPLE }}
+                    >
+                      EXPIRED
+                    </span>
+                  </div>
+                )}
+              </div>
             )}
-            <p className="text-xs text-zinc-500">Expires in 5 minutes. Single use.</p>
-            <button
-              onClick={() => {
-                setPair(null);
-                setQrDataUrl(null);
-                setDeploy({ kind: 'idle' });
-              }}
-              className="text-xs underline"
-              style={{ color: EI_PURPLE }}
-            >
-              Generate a new code
-            </button>
+            {expired ? (
+              <button
+                onClick={() => {
+                  setPair(null);
+                  setQrDataUrl(null);
+                  setDeploy({ kind: 'idle' });
+                  void runPair(apiKey);
+                }}
+                disabled={busy}
+                style={{ backgroundColor: busy ? EI_PURPLE_HOVER : EI_PURPLE }}
+                onMouseOver={(e) => (e.currentTarget.style.backgroundColor = EI_PURPLE_HOVER)}
+                onMouseOut={(e) => (e.currentTarget.style.backgroundColor = busy ? EI_PURPLE_HOVER : EI_PURPLE)}
+                className="rounded-md px-4 py-2 text-sm font-medium text-white transition-colors disabled:opacity-60"
+              >
+                {busy ? 'Regenerating…' : 'Regenerate code'}
+              </button>
+            ) : (
+              <>
+                <p className="text-xs text-zinc-500 tabular-nums">
+                  Expires in {Math.floor(secondsLeft / 60)}:
+                  {String(secondsLeft % 60).padStart(2, '0')}. Single use.
+                </p>
+                <button
+                  onClick={() => {
+                    setPair(null);
+                    setQrDataUrl(null);
+                    setDeploy({ kind: 'idle' });
+                  }}
+                  className="text-xs underline"
+                  style={{ color: EI_PURPLE }}
+                >
+                  Generate a new code
+                </button>
+              </>
+            )}
           </section>
 
           <section className="flex flex-col gap-3 rounded-lg border border-zinc-200 p-6 dark:border-zinc-800">
