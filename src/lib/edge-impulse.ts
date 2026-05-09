@@ -139,6 +139,20 @@ export class EdgeImpulseClient {
     );
   }
 
+  // GET /api/{projectId}/deployment/download?type=&engine=
+  // Returns the raw ZIP bytes of the build artifact. Not JSON — bypasses
+  // the standard `request()` helper.
+  async downloadDeployment(type: string, engine: ModelEngine): Promise<ArrayBuffer> {
+    const url = new URL(`${STUDIO}/api/${this.projectId}/deployment/download`);
+    url.searchParams.set('type', type);
+    url.searchParams.set('engine', engine);
+    const res = await fetch(url, { headers: { 'x-api-key': this.apiKey } });
+    if (!res.ok) {
+      throw new Error(`Download failed (HTTP ${res.status}): ${await res.text().catch(() => res.statusText)}`);
+    }
+    return res.arrayBuffer();
+  }
+
   // GET /api/{projectId}/deployment?type=&engine=
   // Returns whether a build artifact already exists for the given combo.
   // `type` is the format string from listDeploymentTargets().

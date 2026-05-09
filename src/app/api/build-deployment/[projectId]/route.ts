@@ -1,41 +1,33 @@
 import { type NextRequest } from 'next/server';
 import { EdgeImpulseClient, type ModelEngine, type DeploymentTarget } from '@/lib/edge-impulse';
 
-const PREFERRED_ENGINE: ModelEngine = 'tflite-eon';
+// Edge Impulse doesn't expose ONNX as a deploy block for most projects, so
+// we use the universally-available `arduino` (or fallback) target with the
+// plain `tflite` engine — that gives us a TFLite flatbuffer we extract from
+// the zip and convert to ONNX server-side. EON Compiler engines aren't
+// portable to ONNX so we explicitly avoid them.
+const PREFERRED_ENGINE: ModelEngine = 'tflite';
+const TARGET_PRIORITY = ['arduino', 'android-cpp', 'wasm-browser-simd', 'wasm', 'zip'];
 
-/**
- * The exact `type` string EI expects depends on the project — different
- * projects expose different deploy blocks. We probe the project's available
- * targets and pick the best ONNX-flavored one. We rank candidates by:
- *   1. Format string match against ONNX hints
- *   2. Not disabled for this project
- *   3. Has EON Compiler support (so the DSP step bakes into the model)
- */
-function pickOnnxTarget(targets: DeploymentTarget[]): DeploymentTarget | null {
-  const onnxHints = ['onnx-model', 'onnx', 'tensorrt-onnx', 'open-neural-network'];
-  const candidates = targets
-    .filter((t) => !t.disabledForProject)
-    .filter((t) => {
-      const f = (t.format || '').toLowerCase();
-      const n = (t.name || '').toLowerCase();
-      return onnxHints.some((h) => f.includes(h) || n.includes('onnx'));
-    });
-  if (candidates.length === 0) return null;
-  candidates.sort((a, b) => {
-    const score = (t: DeploymentTarget) =>
-      (t.hasEonCompiler ? 2 : 0) + (t.recommendedForProject ? 1 : 0);
-    return score(b) - score(a);
-  });
-  return candidates[0];
+function pickTFLiteTarget(targets: DeploymentTarget[]): DeploymentTarget | null {
+  const enabled = targets.filter((t) => !t.disabledForProject);
+  for (const wanted of TARGET_PRIORITY) {
+    const hit = enabled.find((t) => (t.format || '').toLowerCase() === wanted);
+    if (hit) return hit;
+  }
+  // Fallback: any enabled target supporting plain tflite engine.
+  return enabled.find((t) => t.supportedEngines.includes('tflite')) ?? null;
 }
 
 /**
  * POST /api/build-deployment/:projectId
  * Header: x-api-key
  *
- * Discovers the project's ONNX-compatible deployment target, then ensures a
- * build exists with EON Compiler enabled (the format Unity Sentis expects,
- * with DSP baked in).
+ * Discovers a TFLite-bearing deployment target for the project (arduino,
+ * android-cpp, wasm, …) and ensures a build exists with the plain `tflite`
+ * engine. The actual TFLite → ONNX conversion happens later in
+ * /api/model-bundle when the headset asks for the model bytes — keeping
+ * this endpoint a fast "build only" call.
  */
 export async function POST(
   request: NextRequest,
@@ -59,15 +51,14 @@ export async function POST(
       { status: 502 },
     );
   }
-  const target = pickOnnxTarget(targets);
+  const target = pickTFLiteTarget(targets);
   if (!target) {
     const formats = targets.map((t) => t.format).filter(Boolean);
     return Response.json(
       {
         error:
-          'No ONNX-compatible deployment target found for this project. ' +
-          `Available formats: ${formats.join(', ') || '(none)'}. ` +
-          'You may need to enable "ONNX model" in the project Deployment page.',
+          'No TFLite-bearing deployment target found (looked for ' +
+          `${TARGET_PRIORITY.join('/')}). Available formats: ${formats.join(', ') || '(none)'}.`,
       },
       { status: 422 },
     );
@@ -164,7 +155,7 @@ export async function GET(
   const ei = new EdgeImpulseClient(apiKey, id);
   try {
     const targets = (await ei.listDeploymentTargets()).targets;
-    const target = pickOnnxTarget(targets);
+    const target = pickTFLiteTarget(targets);
     if (!target) {
       const formats = targets.map((t) => t.format).filter(Boolean);
       return Response.json({

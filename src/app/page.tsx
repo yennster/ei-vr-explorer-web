@@ -268,12 +268,15 @@ export default function Home() {
 
           <section className="flex flex-col gap-3 rounded-lg border border-zinc-200 p-6 dark:border-zinc-800">
             <h2 className="text-sm font-semibold tracking-tight">
-              ONNX deployment (Unity Sentis)
+              Model deployment (TFLite → ONNX → Sentis)
             </h2>
             <p className="text-xs text-zinc-600 dark:text-zinc-400">
-              The headset runs your model with Unity Sentis. We need an ONNX
-              build with EON Compiler enabled (so the DSP step is baked in and
-              Sentis can take raw IMU/audio samples).
+              Edge Impulse doesn't expose raw ONNX, so we use the project's
+              TFLite-bearing deploy (typically <code className="font-mono">arduino</code>),
+              extract the <code className="font-mono">.tflite</code> from the
+              zip, and convert to ONNX server-side via{' '}
+              <code className="font-mono">tflite2onnx</code>. The Quest then
+              loads the result with Unity Sentis.
             </p>
 
             {deploy.kind === 'checking' && (
@@ -282,9 +285,11 @@ export default function Home() {
 
             {deploy.kind === 'ready' && (
               <p className="text-sm" style={{ color: EI_PURPLE }}>
-                ✓ {deploy.type || 'ONNX'} + {deploy.engine || 'EON Compiler'} build is ready
+                ✓ {deploy.type || 'TFLite'} build (engine{' '}
+                <code className="font-mono">{deploy.engine || 'tflite'}</code>) is ready
                 {deploy.version !== undefined && ` (version ${deploy.version})`}.
-                The Quest will auto-pull it on next pair.
+                The Quest will fetch it, the companion will convert TFLite → ONNX,
+                and Sentis will load it.
               </p>
             )}
 
@@ -292,7 +297,8 @@ export default function Home() {
               <>
                 <p className="text-xs text-zinc-500">
                   Will build target <code className="font-mono">{deploy.type}</code> with engine{' '}
-                  <code className="font-mono">{deploy.engine}</code>.
+                  <code className="font-mono">{deploy.engine}</code>. Conversion to ONNX runs
+                  later, when the headset asks for the model.
                 </p>
                 <button
                   onClick={buildDeployment}
@@ -301,16 +307,16 @@ export default function Home() {
                   onMouseOut={(e) => (e.currentTarget.style.backgroundColor = EI_PURPLE)}
                   className="self-start rounded-md px-4 py-2 text-sm font-medium text-white transition-colors"
                 >
-                  Build deployment with EON Compiler
+                  Build TFLite deployment
                 </button>
               </>
             )}
 
             {deploy.kind === 'no-target' && (
               <pre className="whitespace-pre-wrap rounded bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-200">
-                {`This project doesn't expose an ONNX deployment block.\n` +
+                {`No TFLite-bearing deploy target available for this project.\n` +
                   `Available formats: ${deploy.availableFormats.join(', ') || '(none)'}\n\n` +
-                  `In Edge Impulse Studio: Deployment → Search field → "ONNX model" or similar → enable. Then reload this page.`}
+                  `Expected one of: arduino, android-cpp, wasm-browser-simd, wasm, zip.`}
               </pre>
             )}
 
