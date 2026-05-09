@@ -25,7 +25,7 @@ Quest 2 app. Handles:
 
 ## Known issues / TODOs
 
-### TODO — replace history-scan workaround once EI exposes custom org blocks correctly
+### TODO — replace history-scan workaround once EI exposes custom org blocks
 
 When a project has a custom org-level deployment block installed, EI's
 `/api/{projectId}/deployment/targets` endpoint **doesn't include it in the
@@ -39,11 +39,6 @@ build and treats it as the Sentis bundle target. This works for projects
 where the only custom block is the
 [Unity Sentis bundle](https://github.com/yennster/ei-unity-sentis-block);
 it'd be wrong for an org with multiple unrelated custom deployment blocks.
-
-When EI fixes `/deployment/targets` to surface custom org blocks (with
-their display names), remove the history-scan branch in
-`pickPreferredTarget`. Tracking issue: report to the Edge Impulse team —
-update this README when filed.
 
 ## CI
 
