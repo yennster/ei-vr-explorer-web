@@ -10,19 +10,12 @@ type PairResponse = {
   expiresAt: number;
 };
 
-type AvailableTarget = {
-  name?: string;
-  format?: string;
-  uiSection?: string;
-  isSentis?: boolean;
-};
-
 type DeployStatus =
   | { kind: 'idle' }
   | { kind: 'checking' }
-  | { kind: 'missing'; type: string; engine: string; isSentisBlock: boolean; targetName?: string; availableTargets?: AvailableTarget[] }
+  | { kind: 'missing'; type: string; engine: string; isSentisBlock: boolean; targetName?: string }
   | { kind: 'no-target'; availableFormats: string[] }
-  | { kind: 'ready'; version?: number; type: string; engine: string; isSentisBlock: boolean; targetName?: string; availableTargets?: AvailableTarget[] }
+  | { kind: 'ready'; version?: number; type: string; engine: string; isSentisBlock: boolean; targetName?: string }
   | { kind: 'building' }
   | { kind: 'error'; message: string };
 
@@ -180,7 +173,6 @@ export default function Home() {
           isSentisBlock?: boolean;
           targetName?: string;
           availableFormats?: string[];
-          availableTargets?: AvailableTarget[];
         };
         const data = (await res.json()) as CheckOk | { error: string };
         if (cancelled) return;
@@ -197,7 +189,6 @@ export default function Home() {
           targetName: data.targetName,
           type: data.type ?? '',
           engine: data.engine ?? '',
-          availableTargets: data.availableTargets,
         };
         if (data.hasDeployment) {
           setDeploy({ kind: 'ready', version: data.version, ...common });
@@ -387,43 +378,6 @@ export default function Home() {
               </pre>
             )}
 
-            {(deploy.kind === 'ready' || deploy.kind === 'missing') && deploy.availableTargets && (
-              <details className="text-xs text-zinc-500">
-                <summary className="cursor-pointer select-none hover:text-zinc-700 dark:hover:text-zinc-300">
-                  Show all deploy targets the API returned ({deploy.availableTargets.length})
-                  {!deploy.isSentisBlock && deploy.availableTargets.some((t) => t.isSentis)
-                    ? ' — ⚠ a Sentis-flagged target was found but not picked!'
-                    : ''}
-                </summary>
-                <div className="mt-2 max-h-64 overflow-y-auto rounded border border-zinc-200 dark:border-zinc-800">
-                  <table className="w-full text-left">
-                    <thead className="bg-zinc-100 dark:bg-zinc-900">
-                      <tr>
-                        <th className="px-2 py-1">name</th>
-                        <th className="px-2 py-1">format</th>
-                        <th className="px-2 py-1">section</th>
-                        <th className="px-2 py-1">sentis?</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {deploy.availableTargets.map((t, i) => (
-                        <tr key={i} className="border-t border-zinc-200 dark:border-zinc-800">
-                          <td className="px-2 py-1 font-mono">{t.name ?? '—'}</td>
-                          <td className="px-2 py-1 font-mono">{t.format ?? '—'}</td>
-                          <td className="px-2 py-1 font-mono">{t.uiSection ?? '—'}</td>
-                          <td className="px-2 py-1">{t.isSentis ? '✓' : ''}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <p className="mt-2 text-zinc-500">
-                  If the Sentis block should be in this list but isn&apos;t marked ✓, paste its{' '}
-                  <code className="font-mono">name</code> and <code className="font-mono">format</code>{' '}
-                  here so we can broaden the detection regex.
-                </p>
-              </details>
-            )}
 
             {deploy.kind === 'building' && (
               <p className="text-sm text-zinc-500">
