@@ -10,6 +10,14 @@ type PairResponse = {
   expiresAt: number;
 };
 
+type DeployStatus =
+  | { kind: 'idle' }
+  | { kind: 'checking' }
+  | { kind: 'missing' }
+  | { kind: 'ready'; version?: number }
+  | { kind: 'building' }
+  | { kind: 'error'; message: string };
+
 const EI_PURPLE = '#3b47c2';
 const EI_PURPLE_HOVER = '#2a2aea';
 
@@ -19,6 +27,7 @@ export default function Home() {
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [deploy, setDeploy] = useState<DeployStatus>({ kind: 'idle' });
   const autoSubmitted = useRef(false);
 
   const runPair = useCallback(async (keyToUse: string) => {
@@ -53,6 +62,7 @@ export default function Home() {
       }
 
       const ok = data as PairResponse;
+      setApiKey(trimmed); // keep so the build button can authenticate
       setPair(ok);
       const payload = JSON.stringify({ baseUrl: window.location.origin, code: ok.code });
       setQrDataUrl(await QRCode.toDataURL(payload, { margin: 1, width: 280 }));
@@ -73,7 +83,6 @@ export default function Home() {
   }, []);
 
   // Auto-fill + auto-submit when ?apiKey=ei_... is in the URL.
-  // After read, strip the param from the URL so the key isn't left in history.
   useEffect(() => {
     if (autoSubmitted.current) return;
     const url = new URL(window.location.href);
@@ -85,6 +94,62 @@ export default function Home() {
     window.history.replaceState({}, '', url.toString());
     void runPair(fromUrl);
   }, [runPair]);
+
+  // After pairing, check whether the ONNX+EON deployment already exists.
+  useEffect(() => {
+    if (!pair || !apiKey) return;
+    let cancelled = false;
+    setDeploy({ kind: 'checking' });
+    (async () => {
+      try {
+        const res = await fetch(`/api/build-deployment/${pair.projectId}`, {
+          headers: { 'x-api-key': apiKey },
+        });
+        const data = (await res.json()) as
+          | { hasDeployment: boolean; version?: number }
+          | { error: string };
+        if (cancelled) return;
+        if (!res.ok || 'error' in data) {
+          setDeploy({ kind: 'error', message: 'error' in data ? data.error : `HTTP ${res.status}` });
+          return;
+        }
+        setDeploy(
+          data.hasDeployment
+            ? { kind: 'ready', version: data.version }
+            : { kind: 'missing' },
+        );
+      } catch (err) {
+        if (cancelled) return;
+        setDeploy({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [pair, apiKey]);
+
+  async function buildDeployment() {
+    if (!pair || !apiKey) return;
+    setDeploy({ kind: 'building' });
+    try {
+      const res = await fetch(`/api/build-deployment/${pair.projectId}`, {
+        method: 'POST',
+        headers: { 'x-api-key': apiKey },
+      });
+      const data = (await res.json()) as
+        | { built: true; alreadyExisted?: boolean; version?: number; durationMs?: number }
+        | { error: string; stdoutTail?: string };
+      if (!res.ok || 'error' in data) {
+        const tail = 'stdoutTail' in data && data.stdoutTail ? `\n${data.stdoutTail}` : '';
+        setDeploy({
+          kind: 'error',
+          message: ('error' in data ? data.error : `HTTP ${res.status}`) + tail,
+        });
+        return;
+      }
+      setDeploy({ kind: 'ready', version: data.version });
+    } catch (err) {
+      setDeploy({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
+    }
+  }
 
   return (
     <main className="mx-auto flex min-h-screen max-w-xl flex-col gap-8 p-8 font-sans">
@@ -137,40 +202,90 @@ export default function Home() {
       )}
 
       {pair && (
-        <section className="flex flex-col items-center gap-4 rounded-lg border border-zinc-200 p-6 dark:border-zinc-800">
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            Paired with{' '}
-            <span className="font-semibold" style={{ color: EI_PURPLE }}>
-              {pair.projectName}
-            </span>{' '}
-            <span className="text-zinc-500">(#{pair.projectId})</span>
-          </p>
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            Open the VR app on your Quest and scan this code, or type:
-          </p>
-          <p className="font-mono text-4xl tracking-[0.4em]" style={{ color: EI_PURPLE }}>
-            {pair.code}
-          </p>
-          {qrDataUrl && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={qrDataUrl}
-              alt="Pairing QR code"
-              className="rounded bg-white p-2"
-            />
-          )}
-          <p className="text-xs text-zinc-500">Expires in 5 minutes. Single use.</p>
-          <button
-            onClick={() => {
-              setPair(null);
-              setQrDataUrl(null);
-            }}
-            className="text-xs underline"
-            style={{ color: EI_PURPLE }}
-          >
-            Generate a new code
-          </button>
-        </section>
+        <>
+          <section className="flex flex-col items-center gap-4 rounded-lg border border-zinc-200 p-6 dark:border-zinc-800">
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">
+              Paired with{' '}
+              <span className="font-semibold" style={{ color: EI_PURPLE }}>
+                {pair.projectName}
+              </span>{' '}
+              <span className="text-zinc-500">(#{pair.projectId})</span>
+            </p>
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">
+              Open the VR app on your Quest and scan this code, or type:
+            </p>
+            <p className="font-mono text-4xl tracking-[0.4em]" style={{ color: EI_PURPLE }}>
+              {pair.code}
+            </p>
+            {qrDataUrl && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={qrDataUrl}
+                alt="Pairing QR code"
+                className="rounded bg-white p-2"
+              />
+            )}
+            <p className="text-xs text-zinc-500">Expires in 5 minutes. Single use.</p>
+            <button
+              onClick={() => {
+                setPair(null);
+                setQrDataUrl(null);
+                setDeploy({ kind: 'idle' });
+              }}
+              className="text-xs underline"
+              style={{ color: EI_PURPLE }}
+            >
+              Generate a new code
+            </button>
+          </section>
+
+          <section className="flex flex-col gap-3 rounded-lg border border-zinc-200 p-6 dark:border-zinc-800">
+            <h2 className="text-sm font-semibold tracking-tight">
+              ONNX deployment (Unity Sentis)
+            </h2>
+            <p className="text-xs text-zinc-600 dark:text-zinc-400">
+              The headset runs your model with Unity Sentis. We need an ONNX
+              build with EON Compiler enabled (so the DSP step is baked in and
+              Sentis can take raw IMU/audio samples).
+            </p>
+
+            {deploy.kind === 'checking' && (
+              <p className="text-sm text-zinc-500">Checking deployment status…</p>
+            )}
+
+            {deploy.kind === 'ready' && (
+              <p className="text-sm" style={{ color: EI_PURPLE }}>
+                ✓ ONNX + EON Compiler build is ready
+                {deploy.version !== undefined && ` (version ${deploy.version})`}.
+                The Quest will auto-pull it on next pair.
+              </p>
+            )}
+
+            {deploy.kind === 'missing' && (
+              <button
+                onClick={buildDeployment}
+                style={{ backgroundColor: EI_PURPLE }}
+                onMouseOver={(e) => (e.currentTarget.style.backgroundColor = EI_PURPLE_HOVER)}
+                onMouseOut={(e) => (e.currentTarget.style.backgroundColor = EI_PURPLE)}
+                className="self-start rounded-md px-4 py-2 text-sm font-medium text-white transition-colors"
+              >
+                Build ONNX deployment with EON Compiler
+              </button>
+            )}
+
+            {deploy.kind === 'building' && (
+              <p className="text-sm text-zinc-500">
+                Building… this usually takes 1–3 minutes. Don't close this tab.
+              </p>
+            )}
+
+            {deploy.kind === 'error' && (
+              <pre className="whitespace-pre-wrap rounded bg-red-50 p-3 text-xs text-red-700 dark:bg-red-950 dark:text-red-300">
+                {deploy.message}
+              </pre>
+            )}
+          </section>
+        </>
       )}
     </main>
   );

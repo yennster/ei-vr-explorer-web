@@ -119,16 +119,34 @@ export class EdgeImpulseClient {
     );
   }
 
-  // POST /api/{projectId}/deploy  body: { deployType }
+  // POST /api/{projectId}/deploy  body: { deployType } — legacy
   startDeploy(deployType: 'tflite' | 'zip' | 'arduino' | 'onnx' = 'onnx') {
     return this.request<{ success: true }>('POST', `/api/${this.projectId}/deploy`, {
       body: { deployType },
     });
   }
 
-  // GET /api/{projectId}/deploy
+  // GET /api/{projectId}/deploy — legacy
   getDeployArtifact() {
     return this.request<DeployArtifactResponse>('GET', `/api/${this.projectId}/deploy`);
+  }
+
+  // GET /api/{projectId}/deployment?type=&engine=
+  // Returns whether a build artifact already exists for the given combo.
+  getDeployment(type: DeployType, engine: ModelEngine) {
+    return this.request<GetDeploymentResponse>('GET', `/api/${this.projectId}/deployment`, {
+      query: { type, engine },
+    });
+  }
+
+  // POST /api/{projectId}/jobs/build-ondevice-model?type=
+  // body: { engine, modelType? } — kicks off a build and returns a jobId.
+  buildOnDeviceModel(type: DeployType, engine: ModelEngine, modelType: 'float32' | 'int8' = 'float32') {
+    return this.request<JobStartResponse>(
+      'POST',
+      `/api/${this.projectId}/jobs/build-ondevice-model`,
+      { query: { type }, body: { engine, modelType } },
+    );
   }
 
   // POST /api/{projectId}/jobs/train
@@ -152,7 +170,18 @@ export class EdgeImpulseClient {
   }
 }
 
+// ---------- Public types ----------
+
+export type DeployType = 'onnx' | 'tflite' | 'zip' | 'arduino';
+export type ModelEngine = 'tflite' | 'tflite-eon' | 'tflite-eon-ram-optimized';
+
 // ---------- Response types (only the fields we actually use) ----------
+
+export type GetDeploymentResponse = {
+  success: true;
+  hasDeployment: boolean;
+  version?: number;
+};
 
 export type ProjectInfoResponse = {
   success: true;
