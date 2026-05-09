@@ -3,14 +3,25 @@
 Vercel-hosted Next.js companion app for the Edge Impulse VR Explorer
 Quest 2 app. Handles:
 
-- **Pairing** — paste an Edge Impulse API key + project ID, get a 6-digit
-  code + QR the headset can pick up.
-- **Model bundle** — triggers a TFLite build on Edge Impulse, polls the
-  build job, and returns the artifact URL for the headset to download.
-- **Ingestion proxy** — forwards new IMU samples captured on the Quest to
-  the Edge Impulse Ingestion API.
+- **Pairing** — paste an Edge Impulse project API key (project ID is
+  detected automatically), get a 6-digit code + QR the headset can pick up.
+- **Model bundle** — picks a TFLite-bearing deploy target on Edge Impulse
+  (`arduino` / `android-cpp` / `wasm`), triggers the build, downloads the
+  zip, extracts the embedded TFLite, and converts to ONNX server-side via
+  a Python `tflite2onnx` function. Streams the ONNX bytes to the headset.
+- **Ingestion proxy** — forwards new IMU / audio samples captured on the
+  Quest to the Edge Impulse Ingestion API.
 - **Retrain proxy** — kicks off training jobs and surfaces status / stdout
   back to the headset for the in-VR progress HUD.
+
+## Related repos
+
+- **[ei-vr-explorer-unity](https://github.com/yennster/ei-vr-explorer-unity)** —
+  the Quest 2 Unity client this companion pairs with.
+- **[ei-unity-sentis-block](https://github.com/yennster/ei-unity-sentis-block)** —
+  Edge Impulse custom deployment block. Enterprise orgs that install it can
+  skip the companion's extract/convert hops entirely; the block produces a
+  ready-to-use `deploy.zip` directly from the Studio Deployment page.
 
 ## Local dev
 
