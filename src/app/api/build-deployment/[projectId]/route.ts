@@ -199,6 +199,16 @@ export async function GET(
       engine,
       isSentisBlock: isSentisBlock(target),
       targetName: target.name,
+      // For debugging: every enabled target the project sees, so the user
+      // can verify whether the Sentis custom block is reaching them.
+      availableTargets: targets
+        .filter((t) => !t.disabledForProject)
+        .map((t) => ({
+          name: t.name,
+          format: t.format,
+          uiSection: t.uiSection,
+          isSentis: isSentisBlock(t),
+        })),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
