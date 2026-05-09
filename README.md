@@ -23,6 +23,16 @@ Quest 2 app. Handles:
   skip the companion's extract/convert hops entirely; the block produces a
   ready-to-use `deploy.zip` directly from the Studio Deployment page.
 
+## CI
+
+[GitHub Actions](.github/workflows/ci.yml) runs on every push/PR to `main`:
+
+- `npm run lint` — ESLint
+- `npm run typecheck` — `tsc --noEmit`
+- `npm test` — Vitest unit tests (parsers, EI client mocks, ingestion envelope)
+
+No secrets required; the runner only needs Node 24 and `npm ci`.
+
 ## Local dev
 
 ```bash
