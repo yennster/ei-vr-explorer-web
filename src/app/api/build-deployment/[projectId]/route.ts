@@ -1,21 +1,40 @@
 import { type NextRequest } from 'next/server';
 import { EdgeImpulseClient, type ModelEngine, type DeploymentTarget } from '@/lib/edge-impulse';
 
-// Edge Impulse doesn't expose ONNX as a deploy block for most projects, so
-// we use the universally-available `arduino` (or fallback) target with the
-// plain `tflite` engine — that gives us a TFLite flatbuffer we extract from
-// the zip and convert to ONNX server-side. EON Compiler engines aren't
-// portable to ONNX so we explicitly avoid them.
+// Two paths:
+//   - PREFERRED: an installed "Unity Sentis" custom deployment block (matches
+//     the ei-unity-sentis-block repo). It already produces a Sentis-ready
+//     deploy.zip, so the companion just downloads + streams.
+//   - FALLBACK: a TFLite-bearing target (`arduino` / `android-cpp` / `wasm`)
+//     with the plain `tflite` engine. We then extract + convert to ONNX
+//     server-side via /api/convert.
 const PREFERRED_ENGINE: ModelEngine = 'tflite';
 const TARGET_PRIORITY = ['arduino', 'android-cpp', 'wasm-browser-simd', 'wasm', 'zip'];
 
+/** Match anything that looks like the Unity Sentis custom block. */
+function isSentisBlock(t: DeploymentTarget): boolean {
+  const f = (t.format || '').toLowerCase();
+  const n = (t.name || '').toLowerCase();
+  const d = (t.description || '').toLowerCase();
+  // Custom-block formats are project-specific slugs from EI; match by name +
+  // description to be robust across slug conventions.
+  return n.includes('sentis')
+      || n.includes('unity sentis')
+      || f.includes('sentis')
+      || (n.includes('unity') && (n.includes('onnx') || d.includes('onnx + c#')));
+}
+
 function pickTFLiteTarget(targets: DeploymentTarget[]): DeploymentTarget | null {
   const enabled = targets.filter((t) => !t.disabledForProject);
+  // Prefer the Unity Sentis custom block if present (skips the whole
+  // extract-and-convert dance).
+  const sentis = enabled.find(isSentisBlock);
+  if (sentis) return sentis;
+  // Otherwise fall back to a TFLite-bearing target.
   for (const wanted of TARGET_PRIORITY) {
     const hit = enabled.find((t) => (t.format || '').toLowerCase() === wanted);
     if (hit) return hit;
   }
-  // Fallback: any enabled target supporting plain tflite engine.
   return enabled.find((t) => t.supportedEngines.includes('tflite')) ?? null;
 }
 
@@ -84,6 +103,8 @@ export async function POST(
       version: existing.version,
       type: target.format,
       engine,
+      isSentisBlock: isSentisBlock(target),
+      targetName: target.name,
     });
   }
 
@@ -129,6 +150,8 @@ export async function POST(
       durationMs: Date.now() - startedAt,
       type: target.format,
       engine,
+      isSentisBlock: isSentisBlock(target),
+      targetName: target.name,
     });
   }
 
@@ -174,6 +197,8 @@ export async function GET(
       version: r.version,
       type: target.format,
       engine,
+      isSentisBlock: isSentisBlock(target),
+      targetName: target.name,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

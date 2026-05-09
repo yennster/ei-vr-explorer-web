@@ -13,14 +13,65 @@ type PairResponse = {
 type DeployStatus =
   | { kind: 'idle' }
   | { kind: 'checking' }
-  | { kind: 'missing'; type: string; engine: string }
+  | { kind: 'missing'; type: string; engine: string; isSentisBlock: boolean; targetName?: string }
   | { kind: 'no-target'; availableFormats: string[] }
-  | { kind: 'ready'; version?: number; type: string; engine: string }
+  | { kind: 'ready'; version?: number; type: string; engine: string; isSentisBlock: boolean; targetName?: string }
   | { kind: 'building' }
   | { kind: 'error'; message: string };
 
 const EI_PURPLE = '#3b47c2';
 const EI_PURPLE_HOVER = '#2a2aea';
+
+function deployHeading(d: DeployStatus): string {
+  if (d.kind === 'ready' || d.kind === 'missing') {
+    return d.isSentisBlock
+      ? 'Model deployment (Unity Sentis block)'
+      : 'Model deployment (TFLite → ONNX → Sentis)';
+  }
+  return 'Model deployment';
+}
+
+function deployDescription(d: DeployStatus): React.ReactNode {
+  if ((d.kind === 'ready' || d.kind === 'missing') && d.isSentisBlock) {
+    return (
+      <>
+        Your project has the{' '}
+        <a
+          href="https://github.com/yennster/ei-unity-sentis-block"
+          className="underline"
+          style={{ color: EI_PURPLE }}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Unity Sentis custom deployment block
+        </a>{' '}
+        installed — using it directly. The block produces a Sentis-ready
+        deploy.zip with model.onnx + matching C# DSP scripts; the companion
+        just streams the ONNX to the headset. No extraction, no conversion.
+      </>
+    );
+  }
+  return (
+    <>
+      Edge Impulse doesn&apos;t expose raw ONNX, so we use the project&apos;s
+      TFLite-bearing deploy (typically <code className="font-mono">arduino</code>),
+      extract the <code className="font-mono">.tflite</code> from the zip,
+      and convert to ONNX server-side via{' '}
+      <code className="font-mono">tflite2onnx</code>. The Quest then loads
+      the result with Unity Sentis. Install the{' '}
+      <a
+        href="https://github.com/yennster/ei-unity-sentis-block"
+        className="underline"
+        style={{ color: EI_PURPLE }}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        Unity Sentis custom deployment block
+      </a>{' '}
+      on your Edge Impulse Enterprise org to skip the conversion step.
+    </>
+  );
+}
 
 export default function Home() {
   const [apiKey, setApiKey] = useState('');
@@ -112,6 +163,8 @@ export default function Home() {
           version?: number;
           type?: string;
           engine?: string;
+          isSentisBlock?: boolean;
+          targetName?: string;
           availableFormats?: string[];
         };
         const data = (await res.json()) as CheckOk | { error: string };
@@ -124,15 +177,16 @@ export default function Home() {
           setDeploy({ kind: 'no-target', availableFormats: data.availableFormats ?? [] });
           return;
         }
+        const common = {
+          isSentisBlock: data.isSentisBlock ?? false,
+          targetName: data.targetName,
+          type: data.type ?? '',
+          engine: data.engine ?? '',
+        };
         if (data.hasDeployment) {
-          setDeploy({
-            kind: 'ready',
-            version: data.version,
-            type: data.type ?? '',
-            engine: data.engine ?? '',
-          });
+          setDeploy({ kind: 'ready', version: data.version, ...common });
         } else {
-          setDeploy({ kind: 'missing', type: data.type ?? '', engine: data.engine ?? '' });
+          setDeploy({ kind: 'missing', ...common });
         }
       } catch (err) {
         if (cancelled) return;
@@ -157,6 +211,8 @@ export default function Home() {
         durationMs?: number;
         type?: string;
         engine?: string;
+        isSentisBlock?: boolean;
+        targetName?: string;
       };
       const data = (await res.json()) as BuildOk | { error: string; stdoutTail?: string };
       if (!res.ok || 'error' in data) {
@@ -172,6 +228,8 @@ export default function Home() {
         version: data.version,
         type: data.type ?? '',
         engine: data.engine ?? '',
+        isSentisBlock: data.isSentisBlock ?? false,
+        targetName: data.targetName,
       });
     } catch (err) {
       setDeploy({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
@@ -268,15 +326,10 @@ export default function Home() {
 
           <section className="flex flex-col gap-3 rounded-lg border border-zinc-200 p-6 dark:border-zinc-800">
             <h2 className="text-sm font-semibold tracking-tight">
-              Model deployment (TFLite → ONNX → Sentis)
+              {deployHeading(deploy)}
             </h2>
             <p className="text-xs text-zinc-600 dark:text-zinc-400">
-              Edge Impulse doesn't expose raw ONNX, so we use the project's
-              TFLite-bearing deploy (typically <code className="font-mono">arduino</code>),
-              extract the <code className="font-mono">.tflite</code> from the
-              zip, and convert to ONNX server-side via{' '}
-              <code className="font-mono">tflite2onnx</code>. The Quest then
-              loads the result with Unity Sentis.
+              {deployDescription(deploy)}
             </p>
 
             {deploy.kind === 'checking' && (
@@ -285,20 +338,18 @@ export default function Home() {
 
             {deploy.kind === 'ready' && (
               <p className="text-sm" style={{ color: EI_PURPLE }}>
-                ✓ {deploy.type || 'TFLite'} build (engine{' '}
-                <code className="font-mono">{deploy.engine || 'tflite'}</code>) is ready
-                {deploy.version !== undefined && ` (version ${deploy.version})`}.
-                The Quest will fetch it, the companion will convert TFLite → ONNX,
-                and Sentis will load it.
+                {deploy.isSentisBlock
+                  ? <>✓ Sentis bundle ready{deploy.version !== undefined && ` (version ${deploy.version})`}. The Quest will pull the ONNX directly out of the deploy.zip — no conversion step.</>
+                  : <>✓ {deploy.type || 'TFLite'} build (engine <code className="font-mono">{deploy.engine || 'tflite'}</code>) is ready{deploy.version !== undefined && ` (version ${deploy.version})`}. When the Quest fetches it, the companion will convert TFLite → ONNX server-side and stream the result.</>}
               </p>
             )}
 
             {deploy.kind === 'missing' && (
               <>
                 <p className="text-xs text-zinc-500">
-                  Will build target <code className="font-mono">{deploy.type}</code> with engine{' '}
-                  <code className="font-mono">{deploy.engine}</code>. Conversion to ONNX runs
-                  later, when the headset asks for the model.
+                  {deploy.isSentisBlock
+                    ? <>Will build via the Sentis deployment block ({deploy.targetName ?? deploy.type}). Output is a ready-to-use deploy.zip — no conversion step.</>
+                    : <>Will build target <code className="font-mono">{deploy.type}</code> with engine <code className="font-mono">{deploy.engine}</code>. Conversion to ONNX runs later, when the headset asks for the model.</>}
                 </p>
                 <button
                   onClick={buildDeployment}
@@ -307,7 +358,7 @@ export default function Home() {
                   onMouseOut={(e) => (e.currentTarget.style.backgroundColor = EI_PURPLE)}
                   className="self-start rounded-md px-4 py-2 text-sm font-medium text-white transition-colors"
                 >
-                  Build TFLite deployment
+                  {deploy.isSentisBlock ? 'Build Sentis bundle' : 'Build TFLite deployment'}
                 </button>
               </>
             )}
