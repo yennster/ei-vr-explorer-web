@@ -139,6 +139,18 @@ export class EdgeImpulseClient {
     );
   }
 
+  // GET /api/{projectId}/deployment/history?limit=&offset=
+  // Lists previously-built deployments. Used as a fallback when
+  // /deployment/targets doesn't expose a custom org block (an EI quirk —
+  // see TODO in README).
+  listDeploymentHistory(opts?: { limit?: number; offset?: number }) {
+    return this.request<DeploymentHistoryResponse>(
+      'GET',
+      `/api/${this.projectId}/deployment/history`,
+      { query: { limit: opts?.limit, offset: opts?.offset } },
+    );
+  }
+
   // GET /api/{projectId}/deployment/download?type=&engine=
   // Returns the raw ZIP bytes of the build artifact. Not JSON — bypasses
   // the standard `request()` helper.
@@ -221,6 +233,26 @@ export type DeploymentTarget = {
 export type DeploymentTargetsResponse = {
   success: true;
   targets: DeploymentTarget[];
+};
+
+export type DeploymentHistoryEntry = {
+  created: string;
+  deploymentVersion: number;
+  deploymentFormat: string;
+  engine: ModelEngine;
+  modelType?: string;
+  impulseId?: number;
+  impulseName?: string;
+  impulseIsDeleted?: boolean;
+  impulseHasChangedSinceDeployment?: boolean;
+  downloadUrl?: string;
+  deploymentTarget?: DeploymentTarget;
+};
+
+export type DeploymentHistoryResponse = {
+  success: true;
+  totalDeploymentCount: number;
+  deployments: DeploymentHistoryEntry[];
 };
 
 export type ProjectInfoResponse = {

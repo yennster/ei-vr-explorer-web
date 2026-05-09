@@ -1,52 +1,15 @@
 import { type NextRequest } from 'next/server';
-import { EdgeImpulseClient, type ModelEngine, type DeploymentTarget } from '@/lib/edge-impulse';
-
-// Two paths:
-//   - PREFERRED: an installed "Unity Sentis" custom deployment block (matches
-//     the ei-unity-sentis-block repo). It already produces a Sentis-ready
-//     deploy.zip, so the companion just downloads + streams.
-//   - FALLBACK: a TFLite-bearing target (`arduino` / `android-cpp` / `wasm`)
-//     with the plain `tflite` engine. We then extract + convert to ONNX
-//     server-side via /api/convert.
-const PREFERRED_ENGINE: ModelEngine = 'tflite';
-const TARGET_PRIORITY = ['arduino', 'android-cpp', 'wasm-browser-simd', 'wasm', 'zip'];
-
-/** Match anything that looks like the Unity Sentis custom block. */
-function isSentisBlock(t: DeploymentTarget): boolean {
-  const f = (t.format || '').toLowerCase();
-  const n = (t.name || '').toLowerCase();
-  const d = (t.description || '').toLowerCase();
-  // Custom-block formats are project-specific slugs from EI; match by name +
-  // description to be robust across slug conventions.
-  return n.includes('sentis')
-      || n.includes('unity sentis')
-      || f.includes('sentis')
-      || (n.includes('unity') && (n.includes('onnx') || d.includes('onnx + c#')));
-}
-
-function pickTFLiteTarget(targets: DeploymentTarget[]): DeploymentTarget | null {
-  const enabled = targets.filter((t) => !t.disabledForProject);
-  // Prefer the Unity Sentis custom block if present (skips the whole
-  // extract-and-convert dance).
-  const sentis = enabled.find(isSentisBlock);
-  if (sentis) return sentis;
-  // Otherwise fall back to a TFLite-bearing target.
-  for (const wanted of TARGET_PRIORITY) {
-    const hit = enabled.find((t) => (t.format || '').toLowerCase() === wanted);
-    if (hit) return hit;
-  }
-  return enabled.find((t) => t.supportedEngines.includes('tflite')) ?? null;
-}
+import { EdgeImpulseClient } from '@/lib/edge-impulse';
+import { pickPreferredTarget } from '@/lib/pick-target';
 
 /**
  * POST /api/build-deployment/:projectId
  * Header: x-api-key
  *
- * Discovers a TFLite-bearing deployment target for the project (arduino,
- * android-cpp, wasm, …) and ensures a build exists with the plain `tflite`
- * engine. The actual TFLite → ONNX conversion happens later in
- * /api/model-bundle when the headset asks for the model bytes — keeping
- * this endpoint a fast "build only" call.
+ * Picks the right deployment target via pickPreferredTarget (Sentis custom
+ * block first, then history fallback, then TFLite-bearing standard targets)
+ * and ensures a build exists. The actual TFLite → ONNX conversion happens
+ * later in /api/model-bundle when the headset asks for the model bytes.
  */
 export async function POST(
   request: NextRequest,
@@ -60,7 +23,6 @@ export async function POST(
 
   const ei = new EdgeImpulseClient(apiKey, id);
 
-  // Discover the right deployment type for THIS project.
   let targets;
   try {
     targets = (await ei.listDeploymentTargets()).targets;
@@ -70,26 +32,23 @@ export async function POST(
       { status: 502 },
     );
   }
-  const target = pickTFLiteTarget(targets);
-  if (!target) {
-    const formats = targets.map((t) => t.format).filter(Boolean);
+  const picked = await pickPreferredTarget(ei, targets);
+  if (picked.kind === 'no-target') {
     return Response.json(
       {
         error:
-          'No TFLite-bearing deployment target found (looked for ' +
-          `${TARGET_PRIORITY.join('/')}). Available formats: ${formats.join(', ') || '(none)'}.`,
+          'No deployment target found. Available formats: ' +
+          (picked.availableFormats.join(', ') || '(none)'),
       },
       { status: 422 },
     );
   }
-  const engine: ModelEngine = target.supportedEngines.includes(PREFERRED_ENGINE)
-    ? PREFERRED_ENGINE
-    : (target.supportedEngines[0] ?? 'tflite');
+  const target = picked.target;
 
   // 1. Already built?
   let existing;
   try {
-    existing = await ei.getDeployment(target.format, engine);
+    existing = await ei.getDeployment(target.format, target.engine);
   } catch (err) {
     return Response.json(
       { error: `Failed to check deployment status: ${err instanceof Error ? err.message : err}` },
@@ -102,9 +61,10 @@ export async function POST(
       alreadyExisted: true,
       version: existing.version,
       type: target.format,
-      engine,
-      isSentisBlock: isSentisBlock(target),
+      engine: target.engine,
+      isSentisBlock: target.isSentis,
       targetName: target.name,
+      fromHistory: target.fromHistory,
     });
   }
 
@@ -112,7 +72,7 @@ export async function POST(
   const startedAt = Date.now();
   let jobId: number;
   try {
-    const start = await ei.buildOnDeviceModel(target.format, engine);
+    const start = await ei.buildOnDeviceModel(target.format, target.engine);
     jobId = start.id;
   } catch (err) {
     return Response.json(
@@ -121,7 +81,8 @@ export async function POST(
     );
   }
 
-  // 3. Poll until done. Cap at 4.5 minutes.
+  // 3. Poll until done. Cap at 4.5 minutes to leave headroom under the 300s
+  //    Vercel function timeout.
   const deadline = startedAt + 4.5 * 60 * 1000;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 4000));
@@ -149,9 +110,10 @@ export async function POST(
       jobId,
       durationMs: Date.now() - startedAt,
       type: target.format,
-      engine,
-      isSentisBlock: isSentisBlock(target),
+      engine: target.engine,
+      isSentisBlock: target.isSentis,
       targetName: target.name,
+      fromHistory: target.fromHistory,
     });
   }
 
@@ -178,27 +140,25 @@ export async function GET(
   const ei = new EdgeImpulseClient(apiKey, id);
   try {
     const targets = (await ei.listDeploymentTargets()).targets;
-    const target = pickTFLiteTarget(targets);
-    if (!target) {
-      const formats = targets.map((t) => t.format).filter(Boolean);
+    const picked = await pickPreferredTarget(ei, targets);
+    if (picked.kind === 'no-target') {
       return Response.json({
         hasDeployment: false,
         targetFound: false,
-        availableFormats: formats,
+        availableFormats: picked.availableFormats,
       });
     }
-    const engine: ModelEngine = target.supportedEngines.includes(PREFERRED_ENGINE)
-      ? PREFERRED_ENGINE
-      : (target.supportedEngines[0] ?? 'tflite');
-    const r = await ei.getDeployment(target.format, engine);
+    const t = picked.target;
+    const r = await ei.getDeployment(t.format, t.engine);
     return Response.json({
       hasDeployment: r.hasDeployment,
       targetFound: true,
       version: r.version,
-      type: target.format,
-      engine,
-      isSentisBlock: isSentisBlock(target),
-      targetName: target.name,
+      type: t.format,
+      engine: t.engine,
+      isSentisBlock: t.isSentis,
+      targetName: t.name,
+      fromHistory: t.fromHistory,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

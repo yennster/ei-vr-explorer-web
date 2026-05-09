@@ -23,6 +23,28 @@ Quest 2 app. Handles:
   skip the companion's extract/convert hops entirely; the block produces a
   ready-to-use `deploy.zip` directly from the Studio Deployment page.
 
+## Known issues / TODOs
+
+### TODO — replace history-scan workaround once EI exposes custom org blocks correctly
+
+When a project has a custom org-level deployment block installed, EI's
+`/api/{projectId}/deployment/targets` endpoint **doesn't include it in the
+returned list** — even though the block clearly works (you can build with
+it from Studio, and the resulting build shows up in
+`/deployment/history` with `format: "org-XXXXX"`).
+
+As a temporary workaround, [`src/lib/pick-target.ts`](src/lib/pick-target.ts)
+falls back to scanning `/deployment/history` for any recent `org-*`
+build and treats it as the Sentis bundle target. This works for projects
+where the only custom block is the
+[Unity Sentis bundle](https://github.com/yennster/ei-unity-sentis-block);
+it'd be wrong for an org with multiple unrelated custom deployment blocks.
+
+When EI fixes `/deployment/targets` to surface custom org blocks (with
+their display names), remove the history-scan branch in
+`pickPreferredTarget`. Tracking issue: report to the Edge Impulse team —
+update this README when filed.
+
 ## CI
 
 [GitHub Actions](.github/workflows/ci.yml) runs on every push/PR to `main`:

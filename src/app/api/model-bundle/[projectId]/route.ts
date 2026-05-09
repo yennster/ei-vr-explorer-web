@@ -1,52 +1,23 @@
 import { type NextRequest } from 'next/server';
 import JSZip from 'jszip';
-import {
-  EdgeImpulseClient,
-  type DeploymentTarget,
-  type ModelEngine,
-} from '@/lib/edge-impulse';
+import { EdgeImpulseClient } from '@/lib/edge-impulse';
+import { pickPreferredTarget } from '@/lib/pick-target';
 import { extractTFLiteFromDeploymentZip } from '@/lib/tflite-extract';
-
-const TARGET_PRIORITY = ['arduino', 'android-cpp', 'wasm-browser-simd', 'wasm', 'zip'];
-const ENGINE: ModelEngine = 'tflite';
-
-function isSentisBlock(t: DeploymentTarget): boolean {
-  const f = (t.format || '').toLowerCase();
-  const n = (t.name || '').toLowerCase();
-  const d = (t.description || '').toLowerCase();
-  return n.includes('sentis')
-      || f.includes('sentis')
-      || (n.includes('unity') && (n.includes('onnx') || d.includes('onnx + c#')));
-}
-
-function pickTarget(targets: DeploymentTarget[]): DeploymentTarget | null {
-  const enabled = targets.filter((t) => !t.disabledForProject);
-  // Prefer the Unity Sentis custom block — short-circuits the entire
-  // extract-and-convert pipeline.
-  const sentis = enabled.find(isSentisBlock);
-  if (sentis) return sentis;
-  for (const wanted of TARGET_PRIORITY) {
-    const hit = enabled.find((t) => (t.format || '').toLowerCase() === wanted);
-    if (hit) return hit;
-  }
-  return enabled.find((t) => t.supportedEngines.includes('tflite')) ?? null;
-}
 
 /**
  * GET /api/model-bundle/:projectId
  * Header: x-api-key
  *
- * Two paths:
+ * Two paths, decided by pickPreferredTarget:
  *
- *   A. Sentis custom block path (preferred when installed):
- *      EI's deploy.zip already contains model.onnx — extract that and
- *      stream. No conversion needed.
+ *   A. Sentis path (target.isSentis === true): EI's deploy.zip already
+ *      contains model.onnx — extract that and stream. No conversion.
+ *      Triggered by either a real /deployment/targets match OR a recent
+ *      org-* build from /deployment/history (workaround — see TODO in
+ *      unity-app/README.md).
  *
- *   B. TFLite extract+convert fallback:
- *      Use the universally-available `arduino` (or fallback) deploy with
- *      the plain `tflite` engine, extract the TFLite from the C-array
- *      inside the zip, run tflite2onnx via /api/convert, stream the ONNX
- *      back. Slower but works on any Edge Impulse project.
+ *   B. TFLite extract+convert fallback: arduino/android-cpp/wasm zip,
+ *      extract the C-array, run tflite2onnx via /api/convert.
  */
 export async function GET(
   request: NextRequest,
@@ -69,55 +40,55 @@ export async function GET(
       { status: 502 },
     );
   }
-  const target = pickTarget(targets);
-  if (!target) {
+  const picked = await pickPreferredTarget(ei, targets);
+  if (picked.kind === 'no-target') {
     return Response.json(
-      { error: `No suitable deploy target. Looked for Unity Sentis block or one of ${TARGET_PRIORITY.join('/')}.` },
+      { error: 'No deployable target. Try arduino/android-cpp/wasm or install the Sentis custom block.' },
       { status: 422 },
     );
   }
-  const engine: ModelEngine = target.supportedEngines.includes(ENGINE)
-    ? ENGINE
-    : (target.supportedEngines[0] ?? 'tflite');
-  const useSentis = isSentisBlock(target);
+  const target = picked.target;
 
-  // Ensure the build exists.
-  let exists;
-  try {
-    exists = await ei.getDeployment(target.format, engine);
-  } catch (err) {
-    return Response.json(
-      { error: `Status check failed: ${err instanceof Error ? err.message : err}` },
-      { status: 502 },
-    );
-  }
-  if (!exists.hasDeployment) {
-    let jobId: number;
+  // Ensure the build exists. Skip if synthesized from history — we already
+  // know there's at least one prior build.
+  if (!target.fromHistory) {
+    let exists;
     try {
-      jobId = (await ei.buildOnDeviceModel(target.format, engine)).id;
+      exists = await ei.getDeployment(target.format, target.engine);
     } catch (err) {
       return Response.json(
-        { error: `Failed to start build: ${err instanceof Error ? err.message : err}` },
+        { error: `Status check failed: ${err instanceof Error ? err.message : err}` },
         { status: 502 },
       );
     }
-    const deadline = Date.now() + 4 * 60 * 1000;
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 4000));
-      const status = await ei.getJobStatus(jobId).catch(() => null);
-      if (!status) continue;
-      if (!status.job.finished) continue;
-      if (!status.job.finishedSuccessful) {
-        return Response.json({ error: 'EI build job failed', jobId }, { status: 502 });
+    if (!exists.hasDeployment) {
+      let jobId: number;
+      try {
+        jobId = (await ei.buildOnDeviceModel(target.format, target.engine)).id;
+      } catch (err) {
+        return Response.json(
+          { error: `Failed to start build: ${err instanceof Error ? err.message : err}` },
+          { status: 502 },
+        );
       }
-      break;
+      const deadline = Date.now() + 4 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 4000));
+        const status = await ei.getJobStatus(jobId).catch(() => null);
+        if (!status) continue;
+        if (!status.job.finished) continue;
+        if (!status.job.finishedSuccessful) {
+          return Response.json({ error: 'EI build job failed', jobId }, { status: 502 });
+        }
+        break;
+      }
     }
   }
 
   // Download the deploy zip.
   let zipBytes: ArrayBuffer;
   try {
-    zipBytes = await ei.downloadDeployment(target.format, engine);
+    zipBytes = await ei.downloadDeployment(target.format, target.engine);
   } catch (err) {
     return Response.json(
       { error: `Failed to download deploy: ${err instanceof Error ? err.message : err}` },
@@ -125,8 +96,8 @@ export async function GET(
     );
   }
 
-  // ---- Sentis custom-block path -----------------------------------------
-  if (useSentis) {
+  // ---- Sentis path -----------------------------------------------------
+  if (target.isSentis) {
     let onnxBytes: ArrayBuffer;
     try {
       const zip = await JSZip.loadAsync(zipBytes);
@@ -136,13 +107,15 @@ export async function GET(
       if (!modelFile) {
         const names = Object.keys(zip.files).slice(0, 20).join(', ');
         return Response.json(
-          { error: `model.onnx missing from Sentis bundle. Files: ${names}` },
+          {
+            error:
+              `model.onnx missing from custom-block bundle (format=${target.format}). ` +
+              `Files: ${names}`,
+          },
           { status: 502 },
         );
       }
       const buf = await modelFile.async('uint8array');
-      // Copy into a fresh ArrayBuffer to satisfy strict typing — JSZip
-      // returns Uint8Array<ArrayBuffer | SharedArrayBuffer>.
       const fresh = new ArrayBuffer(buf.byteLength);
       new Uint8Array(fresh).set(buf);
       onnxBytes = fresh;
@@ -159,8 +132,8 @@ export async function GET(
         'Content-Length': String(onnxBytes.byteLength),
         'Cache-Control': 'no-store',
         'X-Model-Type': target.format,
-        'X-Model-Engine': engine,
-        'X-Source': 'sentis-block',
+        'X-Model-Engine': target.engine,
+        'X-Source': target.fromHistory ? 'sentis-block-via-history' : 'sentis-block',
       },
     });
   }
@@ -209,7 +182,7 @@ export async function GET(
       'Content-Length': String(onnxBytes.byteLength),
       'Cache-Control': 'no-store',
       'X-Model-Type': target.format,
-      'X-Model-Engine': engine,
+      'X-Model-Engine': target.engine,
       'X-Source': 'tflite-convert',
     },
   });
