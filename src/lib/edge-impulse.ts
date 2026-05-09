@@ -5,6 +5,26 @@ export type EdgeImpulseError = {
   message: string;
 };
 
+/**
+ * GET /api/projects with an API key returns just the projects that key has
+ * access to. For a project-scoped key (the common case), that's a single
+ * project — which lets us derive the project ID without asking the user.
+ */
+export async function listProjectsForKey(apiKey: string): Promise<Array<{ id: number; name: string }>> {
+  const res = await fetch(`${STUDIO}/api/projects`, {
+    headers: { 'x-api-key': apiKey, 'Accept': 'application/json' },
+  });
+  const text = await res.text();
+  let data: { success?: boolean; error?: string; projects?: Array<{ id: number; name: string }> };
+  try { data = JSON.parse(text); } catch {
+    throw <EdgeImpulseError>{ status: res.status, message: text || res.statusText };
+  }
+  if (!res.ok || data.success === false) {
+    throw <EdgeImpulseError>{ status: res.status, message: data.error || res.statusText };
+  }
+  return data.projects ?? [];
+}
+
 export class EdgeImpulseClient {
   constructor(
     private readonly apiKey: string,
